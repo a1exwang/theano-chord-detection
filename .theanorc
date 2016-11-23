@@ -1,0 +1,4 @@
+[global]
+floatX = float32
+device = cpu
+optimizer=fast_compile
