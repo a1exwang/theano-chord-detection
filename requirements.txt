@@ -1,0 +1,5 @@
+theano
+numpy
+scipy
+librosa
+redis

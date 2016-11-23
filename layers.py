@@ -17,6 +17,12 @@ class Layer(object):
     def params(self):
         pass
 
+    def set_params(self, params):
+        pass
+
+    def get_name(self):
+        return self.name
+
 
 class Relu(Layer):
     def __init__(self, name):
@@ -61,6 +67,9 @@ class Linear(Layer):
     def params(self):
         return [self.W, self.b]
 
+    def set_params(self, params):
+        (self.W, self.b) = params
+
 
 class Convolution(Layer):
     def __init__(self, name, kernel_size, num_input, num_output, init_std):
@@ -80,6 +89,9 @@ class Convolution(Layer):
     def params(self):
         return [self.W, self.b]
         # return [self.W]
+
+    def set_params(self, params):
+        (self.W, self.b) = params
 
 
 class Pooling(Layer):

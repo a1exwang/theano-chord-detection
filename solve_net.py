@@ -13,7 +13,7 @@ def data_iterator(x, y, batch_size, shuffle=True):
 
 
 def solve_net(model, dataset,
-              batch_size, max_epoch, disp_freq, test_freq):
+              max_epoch, disp_freq, test_freq):
 
     iter_counter = 0
     loss_list = []
@@ -23,7 +23,7 @@ def solve_net(model, dataset,
     total_loss_list = []
 
     for k in range(max_epoch):
-        for train_sample in dataset.train_iterator(batch_size):
+        for train_sample in dataset.train_iterator():
             iter_counter += 1
             train_input = train_sample.vec_input()
             train_label = train_sample.label()
@@ -48,7 +48,7 @@ def solve_net(model, dataset,
 
             if iter_counter % test_freq == 0:
                 LOG_INFO('    Testing...')
-                for test_sample in dataset.test_iterator(batch_size):
+                for test_sample in dataset.test_iterator():
                     test_input = test_sample.vec_input()
                     test_label = test_sample.label()
                     t_accuracy, t_loss = model.test(test_input, test_label)

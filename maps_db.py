@@ -7,6 +7,10 @@ import re
 import os
 import librosa
 import stat
+import redis
+import pickle
+import random
+from ast import literal_eval
 
 FIRST_PIANO_KEY_MIDI_VALUE = 21
 FIRST_PIANO_KEY_FREQUENCY = 17.5
@@ -16,13 +20,14 @@ HALVES_PER_OCTAVE = 12
 
 class MapsDB:
     class Sample:
-        def __init__(self, cqt_freqs, dft_freqs, piano_keys, batch_size):
+        def __init__(self, cqt_freqs, dft_freqs, batch_piano_keys, batch_size):
             self.cqt_freqs = cqt_freqs
             self.dft_freqs = dft_freqs
             self.one_hot_piano_keys = np.zeros([batch_size, PIANO_KEY_COUNT])
-            self.piano_keys = piano_keys
-            for index, piano_key in enumerate(piano_keys):
-                self.one_hot_piano_keys[index, piano_key] = 1
+            self.piano_keys = batch_piano_keys
+            for index, piano_keys in enumerate(batch_piano_keys):
+                for key in piano_keys:
+                    self.one_hot_piano_keys[index, key] = 1
 
         def vec_input(self):
             if self.dft_freqs is None:
@@ -34,7 +39,9 @@ class MapsDB:
         def label(self):
             return self.one_hot_piano_keys
 
-    def __init__(self, dir_path, type1='ISOL', type2='NO', freq_count=10000, start_time=0.5, duration=0.5, count_bins=88, shuffle=True, use_dft=True):
+    def __init__(self, dir_path, type1='ISOL', type2='NO', freq_count=10000,
+                 start_time=0.5, duration=0.5, count_bins=88, shuffle=True, use_dft=True, batch_size=4):
+        self.rserver = redis.Redis()
         self.dir_path = dir_path
         self.freq_count = freq_count
         self.start_time = start_time
@@ -42,7 +49,10 @@ class MapsDB:
         self.count_bins = count_bins
         self.cached_samples = {}
         self.use_dft = use_dft
+        self.batch_size = batch_size
+        self.shuffle = shuffle
         wav_files = []
+
         for instr_name in os.listdir(dir_path):
             instr_dir = os.path.join(dir_path, instr_name)
             mode = os.stat(instr_dir)[stat.ST_MODE]
@@ -72,6 +82,9 @@ class MapsDB:
         self.train_data = wav_files
         self.test_data = wav_files[0::30]
 
+    def load_cache(self):
+        self.deserialize_samples()
+
     def get_vec_input_width(self):
         if self.use_dft:
             return self.freq_count + self.count_bins
@@ -82,27 +95,28 @@ class MapsDB:
     def get_label_width():
         return PIANO_KEY_COUNT
 
-    def train_iterator(self, batch_size):
-        for val in self.data_iterator(self.train_data, batch_size):
+    def train_iterator(self):
+        for val in self.data_iterator(self.train_data):
             yield val
 
-    def test_iterator(self, batch_size):
-        for val in self.data_iterator(self.test_data, batch_size):
+    def test_iterator(self):
+        for val in self.data_iterator(self.test_data):
             yield val
 
-    def data_iterator(self, wav_files, batch_size):
+    def data_iterator(self, wav_files):
         current_batch_index = 0
         if self.use_dft:
-            dft_freqs = np.zeros([batch_size, self.freq_count], dtype='float32')
+            dft_freqs = np.zeros([self.batch_size, self.freq_count], dtype='float32')
         else:
             dft_freqs = None
 
-        cqt_freqs = np.zeros([batch_size, self.count_bins], dtype='float32')
-        piano_keys = np.zeros([batch_size], dtype='int32')
+        cqt_freqs = np.zeros([self.batch_size, self.count_bins], dtype='float32')
+        piano_keys = [[]] * self.batch_size
 
+        random.shuffle(wav_files)
         for (piano_key, file_path) in wav_files:
             if file_path in self.cached_samples:
-                current_cqt_freqs, current_dft_freqs, current_piano_key = \
+                current_cqt_freqs, current_dft_freqs, current_piano_keys = \
                     self.cached_samples[file_path]
             else:
                 (sample_rate, data) = scipy.io.wavfile.read(file_path, mmap=True)
@@ -143,15 +157,42 @@ class MapsDB:
                                     real=True)
                 current_cqt_freqs = np.reshape(midis[:, 0], [1, self.count_bins])
                 # Piano key
-                current_piano_key = piano_key
-                self.cached_samples[file_path] = (current_cqt_freqs, current_dft_freqs, current_piano_key)
+                current_piano_keys = [piano_key]
+
+                self.cached_samples[file_path] = (current_cqt_freqs, current_dft_freqs, current_piano_keys)
+                self.serialize_sample(file_path, current_cqt_freqs, current_dft_freqs, current_piano_keys)
 
             cqt_freqs[current_batch_index, :] = current_cqt_freqs
             if self.use_dft:
                 dft_freqs[current_batch_index, :] = current_dft_freqs
-            piano_keys[current_batch_index] = current_piano_key
+            piano_keys[current_batch_index] = current_piano_keys
 
             current_batch_index += 1
-            if current_batch_index == batch_size:
+            if current_batch_index == self.batch_size:
                 current_batch_index = 0
-                yield MapsDB.Sample(cqt_freqs, dft_freqs, piano_keys, batch_size)
+                yield MapsDB.Sample(cqt_freqs, dft_freqs, piano_keys, self.batch_size)
+
+    def flush_db_if_too_old(self):
+        if self.rserver.get('maps_db_guid') != self.redis_guid():
+            self.rserver.flushdb()
+            self.rserver.set('maps_db_guid', self.redis_guid())
+            return True
+        return False
+
+    def redis_guid(self):
+        return "guid_%d_%f_%f_%d_%d_10" % \
+               (self.freq_count, self.start_time, self.duration, self.count_bins, self.use_dft)
+
+    def serialize_sample(self, filename, cqt, dft, keys):
+        self.rserver.set(filename,  (pickle.dumps(cqt), pickle.dumps(dft), pickle.dumps(keys)))
+
+    def deserialize_samples(self):
+        if not self.flush_db_if_too_old():
+            # deserialize
+            for file_path in self.rserver.scan_iter("..*"):
+                a = self.rserver.get(file_path)
+                (cqt_, dft_, keys_) = literal_eval(a)
+                cqt = pickle.loads(cqt_)
+                dft = pickle.loads(dft_)
+                keys = pickle.loads(keys_)
+                self.cached_samples[file_path] = (cqt, dft, keys)

@@ -1,6 +1,7 @@
 import theano
 import theano.tensor as T
 from utils import LOG_INFO
+import pickle
 
 
 class Network(object):
@@ -14,6 +15,26 @@ class Network(object):
         self.num_layers += 1
         if layer.trainable:
             self.params += layer.params()
+
+    def dumps(self, file_path):
+        h = {}
+        for layer in self.layer_list:
+            h[layer.get_name()] = layer.params()
+        bin_data = pickle.dumps(h)
+        with open(file_path, 'w') as f:
+            f.write(bin_data)
+
+    def loads(self, file_path):
+        with open(file_path, 'r') as f:
+            h = pickle.loads(f.read())
+            for name in h:
+                self.find_layer_by_name(name).set_params(h[name])
+
+    def find_layer_by_name(self, name):
+        for layer in self.layer_list:
+            if layer.get_name() == name:
+                return layer
+        raise RuntimeError("Wrong layer name")
 
     def compile(self, input_placeholder, label_placeholder, loss, optimizer):
         x = input_placeholder
@@ -44,3 +65,4 @@ class Network(object):
             allow_input_downcast=True)
 
         LOG_INFO('model compilation done!')
+
