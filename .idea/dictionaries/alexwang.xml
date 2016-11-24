@@ -2,7 +2,9 @@
   <dictionary name="alexwang">
     <words>
       <w>freqs</w>
+      <w>isol</w>
       <w>resampled</w>
+      <w>ucho</w>
     </words>
   </dictionary>
 </component>

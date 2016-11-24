@@ -2,6 +2,7 @@ import theano
 import theano.tensor as T
 from utils import LOG_INFO
 from theano.misc.pkl_utils import dump, load
+from nhot_accuracy import NHotAcc
 
 
 class Network(object):
@@ -36,26 +37,25 @@ class Network(object):
                 return layer
         raise RuntimeError("Wrong layer name")
 
-    def compile(self, input_placeholder, label_placeholder, loss, optimizer):
+    def compile(self, input_placeholder, label_placeholder, label_active_size_placeholder, loss, optimizer):
         x = input_placeholder
         for k in range(self.num_layers):
             x = self.layer_list[k].forward(x)
 
         self.loss = loss.forward(x, label_placeholder)
         self.updates = optimizer.get_updates(self.loss, self.params)
-        self.accuracy = T.mean(T.eq(T.argmax(x, axis=-1),
-                               T.argmax(label_placeholder, axis=-1)))
-        self.predict_val = T.argmax(x, axis=-1)
-        self.true_val = T.argmax(label_placeholder, axis=-1)
+
+        nhot_acc = NHotAcc()
+        self.accuracy = nhot_acc(label_placeholder, x, label_active_size_placeholder)
         LOG_INFO('start compiling model...')
         self.train = theano.function(
-            inputs=[input_placeholder, label_placeholder],
-            outputs=[self.loss, self.accuracy, self.predict_val, self.true_val, x],
+            inputs=[input_placeholder, label_placeholder, label_active_size_placeholder],
+            outputs=[self.loss, self.accuracy, x],
             updates=self.updates,
             allow_input_downcast=True)
 
         self.test = theano.function(
-            inputs=[input_placeholder, label_placeholder],
+            inputs=[input_placeholder, label_placeholder, label_active_size_placeholder],
             outputs=[self.accuracy, self.loss],
             allow_input_downcast=True)
 

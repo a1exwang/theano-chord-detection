@@ -18,6 +18,71 @@ PIANO_KEY_COUNT = 88
 HALVES_PER_OCTAVE = 12
 
 
+class MapsFileNameGen:
+    MAPS_AUDIO_FILE_SUFFIX = '.wav'
+
+    def __init__(self, db_dir):
+        self.db_path = db_dir
+
+    @staticmethod
+    def _is_dir(path):
+        return os.path.isdir(path)
+
+    def isol_no(self):
+        db_name = 'ISOL'
+        isol_type = 'NO'
+        for instr_name in os.listdir(self.db_path):
+            instr_dir = os.path.join(self.db_path, instr_name)
+            if not self._is_dir(instr_dir):
+                continue
+            type_dirs = os.listdir(instr_dir)
+            if db_name not in type_dirs:
+                continue
+            if not self._is_dir(os.path.join(self.db_path, instr_name, db_name)):
+                continue
+            full_path = os.path.join(self.db_path, instr_name, db_name, isol_type)
+            if not self._is_dir(full_path):
+                continue
+            for file_name in os.listdir(full_path):
+                if not file_name.endswith(self.MAPS_AUDIO_FILE_SUFFIX):
+                    continue
+                # MAPS_ISOL_NO_[loudness]_S[pedal_pressed]_M[midi]_[instrument].wav
+                m = re.match(r'MAPS_ISOL_NO_(\w)_S(\d)_M(\d+)_\w+\.wav', file_name)
+                if not m:
+                    raise RuntimeError("Unknown Data")
+                piano_key = int(m.group(3)) - FIRST_PIANO_KEY_MIDI_VALUE
+
+                yield ([piano_key],
+                       os.path.join(full_path, file_name))
+
+    def ucho(self, one_octave=True):
+        db_name = 'UCHO'
+        db_type_one_octave = 'I60-68'
+        db_type_full = 'I32-96'
+        db_types = [db_type_one_octave] if one_octave else [db_type_one_octave, db_type_full]
+        for instr_name in os.listdir(self.db_path):
+            instr_dir = os.path.join(self.db_path, instr_name)
+            if not self._is_dir(instr_dir):
+                continue
+            if not self._is_dir(os.path.join(instr_dir, db_name)):
+                continue
+
+            for db_type in db_types:
+                full_path = os.path.join(instr_dir, db_name, db_type)
+                if not self._is_dir(full_path):
+                    raise RuntimeError('Directory not found')
+                for chord_type in os.listdir(full_path):
+                    for file_name in os.listdir(os.path.join(full_path, chord_type)):
+                        if not file_name.endswith(self.MAPS_AUDIO_FILE_SUFFIX):
+                            continue
+                        wav_path = os.path.join(full_path, chord_type, file_name)
+                        txt_path = os.path.join(full_path, chord_type, file_name[0:-3] + 'txt')
+                        with open(txt_path) as f:
+                            piano_keys = map(lambda x: int(x.split()[-1]) - FIRST_PIANO_KEY_MIDI_VALUE,
+                                             f.read().split('\n')[1:-1])
+                            yield (piano_keys, wav_path)
+
+
 class MapsDB:
     class Sample:
         def __init__(self, cqt_freqs, dft_freqs, batch_piano_keys, batch_size):
@@ -39,6 +104,9 @@ class MapsDB:
         def label(self):
             return self.one_hot_piano_keys
 
+        def label_key_count(self):
+            return map(lambda keys: len(keys), self.piano_keys)
+
     def __init__(self, dir_path, type1='ISOL', type2='NO', freq_count=10000,
                  start_time=0.5, duration=0.5, count_bins=88, shuffle=True, use_dft=True, batch_size=4):
         self.rserver = redis.Redis()
@@ -51,34 +119,18 @@ class MapsDB:
         self.use_dft = use_dft
         self.batch_size = batch_size
         self.shuffle = shuffle
+
+        # TODO: read wav_files array from redis rather than disk
         wav_files = []
-
-        for instr_name in os.listdir(dir_path):
-            instr_dir = os.path.join(dir_path, instr_name)
-            mode = os.stat(instr_dir)[stat.ST_MODE]
-            if not stat.S_ISDIR(mode):
-                continue
-            type_dirs = os.listdir(instr_dir)
-            if type1 in type_dirs:
-                full_path = os.path.join(dir_path, instr_name, type1, type2)
-                mode = os.stat(full_path)[stat.ST_MODE]
-                if not stat.S_ISDIR(mode):
-                    continue
-
-                for file_name in os.listdir(full_path):
-                    if file_name.endswith('.wav'):
-                        # MAPS_ISOL_NO_[loudness]_S[pedal_pressed]_M[midi]_[instrument].wav
-                        m = re.match(r'MAPS_ISOL_NO_(\w)_S(\d)_M(\d+)_' + instr_name + '\.wav', file_name)
-                        if not m:
-                            raise RuntimeError("Unknown Data")
-                        loudness = m.group(1)
-                        pedal_pressed = int(m.group(2))
-                        piano_key = int(m.group(3)) - FIRST_PIANO_KEY_MIDI_VALUE
-
-                        wav_files.append(
-                            (piano_key,  full_path + '/' + file_name))
+        file_names = MapsFileNameGen(dir_path)
+        for piano_keys, full_path in file_names.ucho(True):
+            wav_files.append((piano_keys, full_path))
+        for piano_keys, full_path in file_names.isol_no():
+            wav_files.append((piano_keys, full_path))
+        # Sort by file path
         wav_files.sort(key=lambda tup: tup[1])
-        # take even numbered files as train data
+
+        # TODO: seperate train data and test data
         self.train_data = wav_files
         self.test_data = wav_files[0::30]
 
@@ -114,7 +166,7 @@ class MapsDB:
         piano_keys = [[]] * self.batch_size
 
         random.shuffle(wav_files)
-        for (piano_key, file_path) in wav_files:
+        for (current_piano_keys, file_path) in wav_files:
             if file_path in self.cached_samples:
                 current_cqt_freqs, current_dft_freqs, current_piano_keys = \
                     self.cached_samples[file_path]
@@ -156,8 +208,6 @@ class MapsDB:
                                     n_bins=self.count_bins,
                                     real=True)
                 current_cqt_freqs = np.reshape(midis[:, 0], [1, self.count_bins])
-                # Piano key
-                current_piano_keys = [piano_key]
 
                 self.cached_samples[file_path] = (current_cqt_freqs, current_dft_freqs, current_piano_keys)
                 self.serialize_sample(file_path, current_cqt_freqs, current_dft_freqs, current_piano_keys)

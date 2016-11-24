@@ -27,13 +27,8 @@ def solve_net(model, dataset,
             iter_counter += 1
             train_input = train_sample.vec_input()
             train_label = train_sample.label()
-            loss, accuracy, predicts, trues, outs = \
-                model.train(train_input, train_label)
-            # for i in range(batch_size):
-            #     epsilon = 1e-5
-            #     to_max = np.reshape(np.append(outs[i] - epsilon, np.zeros(len(outs[i]))), [2, len(outs[i])])
-            #     v = np.max(to_max, axis=0) * (1 / (1 - epsilon))
-            #     print("Predict %d, True %d, out %s" % (predicts[i], trues[i], str(v)))
+            loss, accuracy, outs = \
+                model.train(train_input, train_label, train_sample.label_key_count())
             loss_list.append(loss)
             accuracy_list.append(accuracy)
 
@@ -46,12 +41,18 @@ def solve_net(model, dataset,
                 loss_list = []
                 accuracy_list = []
 
+                # i = 0
+                # epsilon = 1e-5
+                # to_max = np.reshape(np.append(outs[i] - epsilon, np.zeros(len(outs[i]))), [2, len(outs[i])])
+                # v = np.max(to_max, axis=0) * (1 / (1 - epsilon))
+                # print("out %s" % (str(v)))
+
             if iter_counter % test_freq == 0:
                 LOG_INFO('    Testing...')
                 for test_sample in dataset.test_iterator():
                     test_input = test_sample.vec_input()
                     test_label = test_sample.label()
-                    t_accuracy, t_loss = model.test(test_input, test_label)
+                    t_accuracy, t_loss = model.test(test_input, test_label, train_sample.label_key_count())
                     test_acc.append(t_accuracy)
                     test_loss.append(t_loss)
 
