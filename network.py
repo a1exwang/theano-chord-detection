@@ -1,7 +1,7 @@
 import theano
 import theano.tensor as T
 from utils import LOG_INFO
-import pickle
+from theano.misc.pkl_utils import dump, load
 
 
 class Network(object):
@@ -17,18 +17,18 @@ class Network(object):
             self.params += layer.params()
 
     def dumps(self, file_path):
-        h = {}
-        for layer in self.layer_list:
-            h[layer.get_name()] = layer.params()
-        bin_data = pickle.dumps(h)
-        with open(file_path, 'w') as f:
-            f.write(bin_data)
+        with open(file_path, 'wb') as f:
+            dump(self.params, f)
 
     def loads(self, file_path):
-        with open(file_path, 'r') as f:
-            h = pickle.loads(f.read())
-            for name in h:
-                self.find_layer_by_name(name).set_params(h[name])
+        with open(file_path, 'rb') as f:
+            self.params = load(f)
+        index = 0
+        for layer in self.layer_list:
+            if layer.trainable:
+                for i in range(len(layer.params())):
+                    layer.set_params(i, self.params[index])
+                    index += 1
 
     def find_layer_by_name(self, name):
         for layer in self.layer_list:

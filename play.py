@@ -47,4 +47,5 @@ def play(model, file_path, freq_count, count_bins, duration):
 
     vec = np.append(current_cqt_freqs, current_dft_freqs, axis=1)
     one_hot = model.predict(vec)
-    return one_hot
+    key = np.argmax(one_hot)
+    return {'output': one_hot, 'piano_key': key, 'max_value': one_hot[0][0][key]}

@@ -17,7 +17,7 @@ class Layer(object):
     def params(self):
         pass
 
-    def set_params(self, params):
+    def set_params(self, i, params):
         pass
 
     def get_name(self):
@@ -67,8 +67,13 @@ class Linear(Layer):
     def params(self):
         return [self.W, self.b]
 
-    def set_params(self, params):
-        (self.W, self.b) = params
+    def set_params(self, i, params):
+        if i == 0:
+            self.W = params
+        elif i == 1:
+            self.b = params
+        else:
+            raise RuntimeError("Wrong param index")
 
 
 class Convolution(Layer):

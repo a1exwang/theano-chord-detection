@@ -12,12 +12,17 @@ import sys
 import theano.tensor as T
 
 # Check parameters
-if len(sys.argv) > 0:
-    train_or_play = sys.argv[1] == 'train'
-    model_file_path = None
+if len(sys.argv) >= 2:
+    if sys.argv[1] == 'train':
+        train_or_play = True
+        model_file_path = None
+        play_file_name = None
+    else:
+        train_or_play = False
+        model_file_path = sys.argv[2]
+        play_file_name = sys.argv[3]
 else:
-    train_or_play = False
-    model_file_path = sys.argv[2]
+    raise RuntimeError("Wrong argument")
 
 
 # Initialize signal handler to save model at SIGINT
@@ -37,7 +42,7 @@ duration = 0.5
 dataset = MapsDB('../db',
                  freq_count=freq_count,
                  count_bins=count_bins,
-                 batch_size=10,
+                 batch_size=12,
                  start_time=0.5,
                  duration=0.5)
 model = Network()
@@ -49,7 +54,7 @@ model.add(Softmax('softmax2'))
 loss = CrossEntropyLoss(name='xent')
 # loss = EuclideanLoss(name='r2')
 
-optim = SGDOptimizer(learning_rate=0.0005, weight_decay=0.001, momentum=0.9)
+optim = SGDOptimizer(learning_rate=0.001, weight_decay=0.001, momentum=0.9)
 # optim = AdagradOptimizer(learning_rate=0.01, eps=1e-8)
 
 input_placeholder = T.fmatrix('input')
@@ -60,7 +65,7 @@ if train_or_play:
     dataset.load_cache()
 
     solve_net(model, dataset,
-              max_epoch=100, disp_freq=100, test_freq=1000)
+              max_epoch=3, disp_freq=100, test_freq=1000)
 
     print('Save model? [y/n]')
     yes_or_no = raw_input()
@@ -68,6 +73,8 @@ if train_or_play:
         model.dumps('model.bin')
 else:
     model.loads(model_file_path)
-    one_hot = play(model, '23.wav', freq_count=freq_count, count_bins=count_bins, duration=duration)
-    print(one_hot)
+    dataset.load_cache()
+
+    result = play(model, play_file_name, freq_count=freq_count, count_bins=count_bins, duration=duration)
+    print(result)
 
