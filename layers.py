@@ -55,7 +55,7 @@ class Linear(Layer):
     def __init__(self, name, inputs_dim, num_output, init_std):
         super(Linear, self).__init__(name, trainable=True)
         self.W = sharedX(np.random.randn(inputs_dim, num_output) * init_std, name=name + '/W')
-        self.b = sharedX(np.zeros((num_output)), name=name + '/b')
+        self.b = sharedX(np.zeros(num_output), name=name + '/b')
 
     def forward(self, inputs):
         # Your codes here
@@ -81,7 +81,7 @@ class Convolution(Layer):
         super(Convolution, self).__init__(name, trainable=True)
         W_shape = (num_output, num_input, kernel_size, kernel_size)
         self.W = sharedX(np.random.randn(*W_shape) * init_std, name=name + '/W')
-        self.b = sharedX(np.zeros((num_output)), name=name + '/b')
+        self.b = sharedX(np.zeros(num_output), name=name + '/b')
 
     def forward(self, inputs):
         # Your codes here

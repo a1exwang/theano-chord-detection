@@ -10,6 +10,7 @@ import stat
 import redis
 import pickle
 import random
+from six.moves import cPickle
 from ast import literal_eval
 
 FIRST_PIANO_KEY_MIDI_VALUE = 21
@@ -21,8 +22,9 @@ HALVES_PER_OCTAVE = 12
 class MapsFileNameGen:
     MAPS_AUDIO_FILE_SUFFIX = '.wav'
 
-    def __init__(self, db_dir):
+    def __init__(self, db_dir, rserver):
         self.db_path = db_dir
+        self.rserver = rserver
 
     @staticmethod
     def _is_dir(path):
@@ -55,7 +57,7 @@ class MapsFileNameGen:
                 yield ([piano_key],
                        os.path.join(full_path, file_name))
 
-    def ucho(self, one_octave=True):
+    def ucho(self, one_octave=True, from_cache=True):
         db_name = 'UCHO'
         db_type_one_octave = 'I60-68'
         db_type_full = 'I32-96'
@@ -119,22 +121,33 @@ class MapsDB:
         self.use_dft = use_dft
         self.batch_size = batch_size
         self.shuffle = shuffle
+        self.using_cache = False
+        self.train_data = None
+        self.test_data = None
+        self.test_percentage = 0.1
 
+    def init_for_uncached(self):
         # TODO: read wav_files array from redis rather than disk
         wav_files = []
-        file_names = MapsFileNameGen(dir_path)
+        file_names = MapsFileNameGen(self.dir_path, self.rserver)
         for piano_keys, full_path in file_names.ucho(True):
-            wav_files.append((piano_keys, full_path))
+            wav_files.append((full_path, piano_keys))
         for piano_keys, full_path in file_names.isol_no():
-            wav_files.append((piano_keys, full_path))
+            wav_files.append((full_path, piano_keys))
         # Sort by file path
-        wav_files.sort(key=lambda tup: tup[1])
+        wav_files.sort(key=lambda tup: tup[0])
 
         # TODO: seperate train data and test data
         self.train_data = wav_files
         self.test_data = wav_files[0::30]
 
+    def init_from_cache(self):
+        wav_files = map(lambda key: (key, None), self.cached_samples.keys())
+        self.train_data = wav_files
+        self.test_data = wav_files[0::30]
+
     def load_cache(self):
+        self.init_for_uncached()
         self.deserialize_samples()
 
     def get_vec_input_width(self):
@@ -155,6 +168,46 @@ class MapsDB:
         for val in self.data_iterator(self.test_data):
             yield val
 
+    def do_transformation(self, current_piano_keys, file_path):
+        (sample_rate, data) = scipy.io.wavfile.read(file_path, mmap=True)
+        # Merge into one channel
+        start_index = int(self.start_time * sample_rate)
+        length = int(self.duration * sample_rate)
+
+        wav = wave.open(file_path, 'r')
+        # Max value for n-bit signed integers.
+        max_value = float(2 ** (8 * wav.getsampwidth() - 1))
+        wav.close()
+
+        normalized_data = data / max_value
+        part = np.sum(normalized_data[start_index:(start_index + length)], axis=1)
+
+        # DFT
+        if self.use_dft:
+            resampled_part = scipy.signal.resample(
+                part,
+                self.freq_count * 2,
+                window=np.hanning(length))
+
+            fft_freqs = fft.fft(resampled_part)
+            fft_freqs = np.abs(fft_freqs[0:self.freq_count])
+            fft_freqs = np.reshape(fft_freqs, [1, self.freq_count])
+            current_dft_freqs = fft_freqs
+        else:
+            current_dft_freqs = None
+
+        # CQT
+        hop_length = 16384
+        midis = librosa.cqt(part,
+                            sr=sample_rate,
+                            hop_length=hop_length,
+                            fmin=librosa.midi_to_hz(FIRST_PIANO_KEY_MIDI_VALUE),
+                            bins_per_octave=self.count_bins / PIANO_KEY_COUNT * HALVES_PER_OCTAVE,
+                            n_bins=self.count_bins,
+                            real=True)
+        current_cqt_freqs = np.reshape(midis[:, 0], [1, self.count_bins])
+        return current_cqt_freqs, current_dft_freqs, current_piano_keys
+
     def data_iterator(self, wav_files):
         current_batch_index = 0
         if self.use_dft:
@@ -166,56 +219,20 @@ class MapsDB:
         piano_keys = [[]] * self.batch_size
 
         random.shuffle(wav_files)
-        for (current_piano_keys, file_path) in wav_files:
-            if file_path in self.cached_samples:
-                current_cqt_freqs, current_dft_freqs, current_piano_keys = \
-                    self.cached_samples[file_path]
-            else:
-                (sample_rate, data) = scipy.io.wavfile.read(file_path, mmap=True)
-                # Merge into one channel
-                start_index = int(self.start_time * sample_rate)
-                length = int(self.duration * sample_rate)
+        for file_path, current_piano_keys in wav_files:
+            if file_path not in self.cached_samples:
+                result = self.do_transformation(current_piano_keys, file_path)
+                self.cached_samples[file_path] = result
+                self.serialize_sample(file_path, result)
 
-                wav = wave.open(file_path, 'r')
-                # Max value for n-bit signed integers.
-                max_value = float(2 ** (8 * wav.getsampwidth() - 1))
-                wav.close()
-
-                normalized_data = data / max_value
-                part = np.sum(normalized_data[start_index:(start_index + length)], axis=1)
-
-                # DFT
-                if self.use_dft:
-                    resampled_part = scipy.signal.resample(
-                        part,
-                        self.freq_count * 2,
-                        window=np.hanning(length))
-
-                    fft_freqs = fft.fft(resampled_part)
-                    fft_freqs = np.abs(fft_freqs[0:self.freq_count])
-                    fft_freqs = np.reshape(fft_freqs, [1, self.freq_count])
-                    current_dft_freqs = fft_freqs
-                else:
-                    current_dft_freqs = None
-
-                # CQT
-                hop_length = 16384
-                midis = librosa.cqt(part,
-                                    sr=sample_rate,
-                                    hop_length=hop_length,
-                                    fmin=librosa.midi_to_hz(FIRST_PIANO_KEY_MIDI_VALUE),
-                                    bins_per_octave=self.count_bins / PIANO_KEY_COUNT * HALVES_PER_OCTAVE,
-                                    n_bins=self.count_bins,
-                                    real=True)
-                current_cqt_freqs = np.reshape(midis[:, 0], [1, self.count_bins])
-
-                self.cached_samples[file_path] = (current_cqt_freqs, current_dft_freqs, current_piano_keys)
-                self.serialize_sample(file_path, current_cqt_freqs, current_dft_freqs, current_piano_keys)
-
-            cqt_freqs[current_batch_index, :] = current_cqt_freqs
+            result = self.cached_samples[file_path]
+            cqt_freqs[current_batch_index, :] = result[0]
             if self.use_dft:
-                dft_freqs[current_batch_index, :] = current_dft_freqs
-            piano_keys[current_batch_index] = current_piano_keys
+                dft_freqs[current_batch_index, :] = result[1]
+            # 'result[2]' is actually current_piano_keys, but if using cache,
+            #   current_piano_keys is optimized to None.
+            # So using result[2] is always safe.
+            piano_keys[current_batch_index] = result[2]
 
             current_batch_index += 1
             if current_batch_index == self.batch_size:
@@ -230,19 +247,16 @@ class MapsDB:
         return False
 
     def redis_guid(self):
-        return "guid_%d_%f_%f_%d_%d_10" % \
-               (self.freq_count, self.start_time, self.duration, self.count_bins, self.use_dft)
+        return "guid_%d_%f_%f_%d_1_10" % \
+               (self.freq_count, self.start_time, self.duration, self.count_bins)
 
-    def serialize_sample(self, filename, cqt, dft, keys):
-        self.rserver.set(filename,  (pickle.dumps(cqt), pickle.dumps(dft), pickle.dumps(keys)))
+    def serialize_sample(self, filename, result):
+        self.rserver.set(filename, cPickle.dumps(result))
 
     def deserialize_samples(self):
         if not self.flush_db_if_too_old():
             # deserialize
+            self.using_cache = True
             for file_path in self.rserver.scan_iter("..*"):
-                a = self.rserver.get(file_path)
-                (cqt_, dft_, keys_) = literal_eval(a)
-                cqt = pickle.loads(cqt_)
-                dft = pickle.loads(dft_)
-                keys = pickle.loads(keys_)
-                self.cached_samples[file_path] = (cqt, dft, keys)
+                serialized_data = self.rserver.get(file_path)
+                self.cached_samples[file_path] = cPickle.loads(serialized_data)

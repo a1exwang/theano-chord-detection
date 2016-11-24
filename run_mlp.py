@@ -59,13 +59,13 @@ optim = SGDOptimizer(learning_rate=0.00005, weight_decay=0.001, momentum=0.9)
 input_placeholder = T.fmatrix('input')
 label_placeholder = T.fmatrix('label')
 label_active_size_placeholder = T.ivector('label_active_size')
-model.compile(input_placeholder, label_placeholder, label_active_size_placeholder, loss, optim)
 
 if train_or_play:
+    model.compile(input_placeholder, label_placeholder, label_active_size_placeholder, loss, optim)
     dataset.load_cache()
 
     solve_net(model, dataset,
-              max_epoch=300, disp_freq=100, test_freq=1000)
+              max_epoch=150, disp_freq=100, test_freq=1000)
 
     print('Save model? [y/n]')
     yes_or_no = raw_input()
@@ -73,7 +73,7 @@ if train_or_play:
         model.dumps('model.bin')
 else:
     model.loads(model_file_path)
-    dataset.load_cache()
+    model.compile(input_placeholder, label_placeholder, label_active_size_placeholder, loss, optim)
 
     result = play(model, play_file_name, freq_count=freq_count, count_bins=count_bins, duration=duration)
     print(result)

@@ -7,6 +7,19 @@ import librosa
 from maps_db import PIANO_KEY_COUNT, HALVES_PER_OCTAVE, FIRST_PIANO_KEY_MIDI_VALUE
 
 
+def get_midi_values_from_output(output):
+    maximum = np.max(output)
+    normalized = output / maximum
+    activated = []
+    for index, val in enumerate(list(normalized)):
+        if val > 0.5:
+            activated.append(index + FIRST_PIANO_KEY_MIDI_VALUE)
+    indexes = np.argsort(normalized)[-10:][::-1]
+    for i in indexes:
+        print "MIDI %02d, confidence %02.2f" % (i + FIRST_PIANO_KEY_MIDI_VALUE, output[i])
+    return activated
+
+
 def play(model, file_path, freq_count, count_bins, duration):
     start_time = 0.5
 
@@ -46,6 +59,5 @@ def play(model, file_path, freq_count, count_bins, duration):
     current_cqt_freqs = np.reshape(midis[:, 0], [1, count_bins])
 
     vec = np.append(current_cqt_freqs, current_dft_freqs, axis=1)
-    one_hot = model.predict(vec)
-    key = np.argmax(one_hot)
-    return {'output': one_hot, 'piano_key': key, 'max_value': one_hot[0][0][key]}
+    n_hot = model.predict(vec)
+    return {'output': n_hot, 'activated': get_midi_values_from_output(np.reshape(n_hot, [PIANO_KEY_COUNT]))}

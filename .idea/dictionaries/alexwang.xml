@@ -2,8 +2,10 @@
   <dictionary name="alexwang">
     <words>
       <w>freqs</w>
+      <w>guid</w>
       <w>isol</w>
       <w>resampled</w>
+      <w>rserver</w>
       <w>ucho</w>
     </words>
   </dictionary>
