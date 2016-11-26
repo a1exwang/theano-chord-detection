@@ -6,12 +6,9 @@ import wave
 import re
 import os
 import librosa
-import stat
 import redis
-import pickle
 import random
 from six.moves import cPickle
-from ast import literal_eval
 
 FIRST_PIANO_KEY_MIDI_VALUE = 21
 FIRST_PIANO_KEY_FREQUENCY = 17.5
@@ -57,7 +54,7 @@ class MapsFileNameGen:
                 yield ([piano_key],
                        os.path.join(full_path, file_name))
 
-    def ucho(self, one_octave=True, from_cache=True):
+    def ucho(self, one_octave=True):
         db_name = 'UCHO'
         db_type_one_octave = 'I60-68'
         db_type_full = 'I32-96'
@@ -130,7 +127,7 @@ class MapsDB:
         # TODO: read wav_files array from redis rather than disk
         wav_files = []
         file_names = MapsFileNameGen(self.dir_path, self.rserver)
-        for piano_keys, full_path in file_names.ucho(True):
+        for piano_keys, full_path in file_names.ucho(one_octave=False):
             wav_files.append((full_path, piano_keys))
         for piano_keys, full_path in file_names.isol_no():
             wav_files.append((full_path, piano_keys))
@@ -218,7 +215,8 @@ class MapsDB:
         cqt_freqs = np.zeros([self.batch_size, self.count_bins], dtype='float32')
         piano_keys = [[]] * self.batch_size
 
-        random.shuffle(wav_files)
+        if self.shuffle:
+            random.shuffle(wav_files)
         for file_path, current_piano_keys in wav_files:
             if file_path not in self.cached_samples:
                 result = self.do_transformation(current_piano_keys, file_path)
